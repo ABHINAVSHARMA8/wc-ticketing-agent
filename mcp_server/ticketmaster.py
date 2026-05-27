@@ -274,12 +274,19 @@ def fetch_event_details(event_id: str) -> dict | None:
 def fetch_event_price(event_id: str) -> float | None:
     """
     Fetch the current lowest ticket price for a single event.
+    Uses the search endpoint (which reliably includes priceRanges) rather than
+    the direct event endpoint which often omits pricing data.
     Returns None if the event has no price or does not exist.
-    Raises TicketmasterError on other failures.
     """
     try:
-        data = _get(f"/events/{event_id}.json", {})
-        return _parse_price(data)
+        data = _get("/events.json", {"id": event_id})
+        events = (
+            data.get("_embedded", {}).get("events", [])
+        )
+        if not events:
+            log.warning("Event not found when fetching price: %s", event_id)
+            return None
+        return _parse_price(events[0])
     except TicketmasterNotFoundError:
         log.warning("Event not found when fetching price: %s", event_id)
         return None

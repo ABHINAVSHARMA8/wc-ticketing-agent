@@ -5,7 +5,7 @@ export default function Chat() {
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
-      text: "Hi! I'm your live events ticket assistant.\n\nTry asking:\n• \"Show me concerts near Charlotte in June\"\n• \"Any sports events in Miami this summer?\"\n• \"Subscribe me to Taylor Swift\"\n• \"List my subscriptions\"",
+      text: "Hey! I can help you find live events near you, track ticket prices, and manage your alerts.\n\nTry asking me to find concerts or sports events in your city, subscribe to price alerts for an event, or list your current subscriptions.",
     },
   ])
   const [input, setInput] = useState('')
@@ -39,7 +39,7 @@ export default function Chat() {
 
   async function clearChat() {
     await apiDelete('/chat')
-    setMessages([{ role: 'assistant', text: 'Conversation cleared. How can I help you?' }])
+    setMessages([{ role: 'assistant', text: 'Conversation cleared. What are you looking for?' }])
   }
 
   return (
