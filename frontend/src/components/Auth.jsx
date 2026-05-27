@@ -14,12 +14,17 @@ export default function Auth({ onLogin }) {
     setLoading(true)
     try {
       const endpoint = mode === 'login' ? '/auth/login' : '/auth/register'
-      const data = await apiPost(endpoint, { email, password })
+      const data = await apiPost(endpoint, { email, password }, { skipAuthRedirect: true })
       localStorage.setItem('token', data.token)
       localStorage.setItem('email', data.email)
       onLogin(data.email)
     } catch (err) {
-      setError(err.message)
+      const msg = err.message || ''
+      if (mode === 'login' && (msg.toLowerCase().includes('invalid') || msg.toLowerCase().includes('not found') || msg.includes('401'))) {
+        setError("No account found with these credentials. Please register first.")
+      } else {
+        setError(msg || 'Something went wrong. Please try again.')
+      }
     } finally {
       setLoading(false)
     }

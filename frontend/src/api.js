@@ -33,12 +33,16 @@ export async function apiGet(path) {
   return parseResponse(res)
 }
 
-export async function apiPost(path, body) {
+export async function apiPost(path, body, { skipAuthRedirect = false } = {}) {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify(body),
   })
+  if (skipAuthRedirect && res.status === 401) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail || 'Invalid credentials')
+  }
   return parseResponse(res)
 }
 
