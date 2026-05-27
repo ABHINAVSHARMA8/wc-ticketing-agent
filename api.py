@@ -424,6 +424,9 @@ async def chat(body: ChatMessage, user_email: str = Depends(get_current_user)):
                 log.warning("Malformed tool arguments from model: %s", tc.function.arguments)
                 return {"reply": "I had trouble understanding the search parameters. Could you rephrase?"}
             result = await asyncio.to_thread(_execute_tool, tc.function.name, args)
+            # Truncate large tool results to avoid hitting token limits
+            if len(result) > 6000:
+                result = result[:6000] + "\n... (results truncated)"
             history.append({
                 "role": "tool",
                 "tool_call_id": tc.id,

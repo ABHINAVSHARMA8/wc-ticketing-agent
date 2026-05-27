@@ -12,7 +12,7 @@ TM_RETRY_WAITS     = (1, 2, 4)  # seconds between retry attempts
 
 # Event search defaults
 TM_SEARCH_CLASSIFICATIONS = "music,sports,arts & theatre"
-TM_SEARCH_PAGE_SIZE       = 50
+TM_SEARCH_PAGE_SIZE       = 20
 TM_SEARCH_SORT            = "distance,asc"
 TM_SEARCH_RADIUS_DEFAULT  = 100  # miles
 
