@@ -1,42 +1,63 @@
-# FIFA World Cup 2026 Ticket Agent
+# Live Events Ticket Agent
 
-An AI-powered ticket monitoring agent built with Claude + MCP (Model Context Protocol).
+An agentic AI assistant that helps you find live events, track ticket prices, and get alerted when prices change.
+
+Try it: **https://wc-ticketing-agent.vercel.app/**
+
+---
 
 ## What it does
 
-- **Conversational search** — ask in plain English: _"Show me matches near Charlotte in June under $200"_
-- **Price subscriptions** — subscribe to one or more matches and get emailed when prices change
-- **Background monitoring** — a cron-friendly script polls prices and fires alerts automatically
+- **Conversational search** — ask in plain English: "Show me concerts near Raleigh in June"
+- **Price alerts** — subscribe to events and get emailed when ticket prices change
+- **Background monitoring** — a worker polls Ticketmaster every 10 minutes and fires Resend email alerts automatically
+- **MCP server** — exposes tools over Streamable HTTP, compatible with Claude Desktop
+
+---
+
+## Stack
+
+| Layer | Technology |
+|---|---|
+| Backend | FastAPI, Python 3.13 |
+| LLM | Groq (Llama 4 Scout) with agentic tool-calling loop |
+| Tickets | Ticketmaster Discovery API |
+| Email alerts | Resend |
+| Database | PostgreSQL (psycopg2) |
+| Frontend | React 18 + Vite |
+| MCP | FastMCP, Streamable HTTP transport |
+| Deployment | Render (API + MCP + monitor), Vercel (frontend) |
 
 ---
 
 ## Project structure
 
 ```
-fifa-ticket-agent/
+wc-ticketing-agent/
+├── api.py                  # FastAPI app — chat endpoint, auth, agentic loop
+├── auth.py                 # JWT + bcrypt
 ├── mcp_server/
-│   ├── server.py     # MCP tool definitions (search, subscribe, list, unsubscribe)
-│   ├── db.py         # SQLite helpers
-│   └── geo.py        # Haversine distance + geocoding
-├── agent/
-│   └── chat.py       # Conversational chat loop (connects Claude to MCP server)
+│   ├── server.py           # FastMCP server (stdio + HTTP)
+│   ├── db.py               # PostgreSQL helpers
+│   ├── ticketmaster.py     # Ticketmaster API client
+│   ├── geo.py              # Haversine distance + geocoding
+│   └── constants.py        # Shared constants
 ├── monitor/
-│   └── price_monitor.py  # Background price checker + email alerter
-├── data/
-│   └── matches.json  # Mock FIFA 2026 match data
-├── .env.example      # Environment variable template
+│   └── monitor_prices.py   # Background price monitor + email alerts
+├── frontend/               # React + Vite frontend
+├── render.yaml             # Render Blueprint (4 services)
 └── requirements.txt
 ```
 
 ---
 
-## Quick start
+## Local setup
 
 ### 1. Install dependencies
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate      # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -44,108 +65,80 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-# Edit .env and add your ANTHROPIC_API_KEY
 ```
 
-### 3. Run the agent
+Required env vars:
+
+| Variable | Description |
+|---|---|
+| `GROQ_API_KEY` | Groq API key |
+| `JWT_SECRET` | Strong random secret for JWT signing |
+| `TICKETMASTER_API_KEY` | Ticketmaster Discovery API key |
+| `RESEND_API_KEY` | Resend API key for email alerts |
+| `DATABASE_URL` | PostgreSQL connection string |
+| `CORS_ORIGINS` | Frontend URL (e.g. http://localhost:5173) |
+| `MCP_API_KEY` | Bearer token for remote MCP auth |
+
+### 3. Run the API
 
 ```bash
-python -m agent.chat
+uvicorn api:app --reload
 ```
 
-### 4. Try these prompts
+### 4. Run the frontend
 
-```
-Show me matches near Raleigh in June
-Show me games within 300 miles of Charlotte between June 1 and July 10
-Any matches near me under $200?
-Subscribe me to the first two results
-Subscribe me to all of them, alert only if price drops below $150
-List my subscriptions
-Unsubscribe me from the Charlotte game
+```bash
+cd frontend
+npm install
+npm run dev
 ```
 
 ---
 
-## Running the price monitor
-
-### Single check (good for cron)
+## Price monitor
 
 ```bash
-python -m monitor.price_monitor
-```
+# Single check
+python monitor/monitor_prices.py
 
-### Continuous loop (every 10 minutes)
-
-```bash
-python -m monitor.price_monitor --loop --interval 600
-```
-
-### As a cron job
-
-```cron
-*/10 * * * * cd /path/to/fifa-ticket-agent && .venv/bin/python -m monitor.price_monitor
+# Continuous loop (every 10 minutes)
+python monitor/monitor_prices.py --loop --interval 600
 ```
 
 ---
 
-## Email alerts setup
-
-Without SMTP credentials the monitor still works — alerts are logged to the console instead of emailed.
-
-**Recommended: Resend** (simpler than Gmail)
-1. Sign up at [resend.com](https://resend.com) — free tier is generous
-2. Create an API key
-3. Add to `.env`:
-```
-SMTP_HOST=smtp.resend.com
-SMTP_PORT=587
-SMTP_USER=resend
-SMTP_PASS=your_resend_api_key
-FROM_EMAIL=alerts@yourdomain.com
-```
-
-**Gmail**
-1. Enable 2FA on your Google account
-2. Create an App Password at myaccount.google.com/apppasswords
-3. Add to `.env`:
-```
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=you@gmail.com
-SMTP_PASS=your_16_char_app_password
-FROM_EMAIL=you@gmail.com
-```
-
----
-
-## MCP Tools
+## MCP tools
 
 | Tool | Description |
-|------|-------------|
-| `search_matches` | Find matches by location + date range. Returns sorted by distance then price. |
-| `subscribe_to_matches` | Subscribe to price alerts for one or more match IDs. Supports `notify_on: any/drop/rise` and an optional `price_threshold`. |
-| `list_subscriptions` | List all subscriptions for a user email. |
-| `unsubscribe` | Cancel subscriptions for given match IDs. |
+|---|---|
+| `search_events` | Find events by location + date range, sorted by distance then price |
+| `subscribe_to_events` | Subscribe to price alerts for one or more events |
+| `list_subscriptions` | List all active subscriptions for a user |
+| `unsubscribe` | Cancel subscriptions for given event IDs |
+
+### Claude Desktop config (remote MCP)
+
+```json
+{
+  "mcpServers": {
+    "live-events-agent": {
+      "type": "http",
+      "url": "https://wc-ticketing-agent-mcp.onrender.com/mcp",
+      "headers": { "Authorization": "Bearer YOUR_MCP_API_KEY" }
+    }
+  }
+}
+```
 
 ---
 
-## Replacing mock data with real prices
+## Deployment
 
-The `fetch_current_price()` function in `monitor/price_monitor.py` currently simulates price fluctuations. To connect to real data:
+The project deploys via a Render Blueprint (`render.yaml`) which provisions 4 services automatically:
 
-1. **StubHub API** — register at developer.stubhub.com
-2. **Viagogo API** — register at developer.viagogo.net
-3. **Web scraping** — use `playwright` or `httpx` to scrape the FIFA official ticket portal
+- PostgreSQL database
+- Web API (FastAPI)
+- MCP HTTP server
+- Background monitor worker
 
-Replace the body of `fetch_current_price()` with your real data source.
-
----
-
-## Next steps
-
-- [ ] Add a web UI (FastAPI + React) instead of the CLI chat loop
-- [ ] Deploy MCP server to Railway with HTTP/SSE transport
-- [ ] Add SMS alerts via Twilio
-- [ ] Persist conversation history to DB for multi-session memory
-- [ ] Add a `get_price_history` tool so users can ask "has the price been dropping?"
+The React frontend deploys to Vercel with `VITE_API_URL` pointing to the Render web service.
