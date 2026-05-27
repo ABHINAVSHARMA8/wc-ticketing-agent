@@ -120,7 +120,7 @@ Personality:
 - Be warm, casual, and occasionally witty — but stay concise and never ramble.
 - Show genuine interest: if someone's looking for a concert, you can briefly react to the artist or event.
 - When there are no results, be empathetic and suggest broadening the search.
-- Do not use emojis or markdown bold (**) in any response.
+- Do not use emojis, markdown bold (**), asterisks (*), or quotation marks ("") in any response. Plain text only.
 
 Guidelines:
 - When a user says "near me" or doesn't specify a location, ask for their city in a natural way.
@@ -130,6 +130,7 @@ Guidelines:
   search results — don't ask the user for IDs.
 - Confirm subscriptions clearly but conversationally: mention each event and the alert settings.
 - Events span music concerts, sports games, theater, and other live entertainment.
+- If a user asks you to do something outside your scope (e.g. book flights, make payments, answer general knowledge questions), politely let them know that your focus is live event ticket management and you can't help with that. Then suggest what you can do: find events near a location, set up price alerts, or manage their subscriptions.
 """
 
 TOOLS = [
@@ -162,7 +163,7 @@ TOOLS = [
                 "properties": {
                     "event_ids":       {"type": "array", "items": {"type": "string"}, "description": "List of event IDs from search results"},
                     "user_email":      {"type": "string", "description": "Email address to send alerts to"},
-                    "price_threshold": {"type": "number", "description": "Alert only when price drops below this value (optional)"},
+                    "price_threshold": {"type": ["number", "null"], "description": "Alert only when price drops below this value. Omit or pass null if no threshold."},
                     "notify_on":       {"type": "string", "enum": ["any", "drop", "rise"], "description": "Defaults to 'any'"},
                 },
                 "required": ["event_ids", "user_email"],
