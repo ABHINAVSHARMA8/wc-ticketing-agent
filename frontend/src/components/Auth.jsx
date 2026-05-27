@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { apiPost } from '../api'
 
 export default function Auth({ onLogin }) {
   const [mode, setMode] = useState('login')
@@ -12,14 +13,8 @@ export default function Auth({ onLogin }) {
     setError('')
     setLoading(true)
     try {
-      const endpoint = mode === 'login' ? '/api/auth/login' : '/api/auth/register'
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Request failed')
+      const endpoint = mode === 'login' ? '/auth/login' : '/auth/register'
+      const data = await apiPost(endpoint, { email, password })
       localStorage.setItem('token', data.token)
       localStorage.setItem('email', data.email)
       onLogin(data.email)
