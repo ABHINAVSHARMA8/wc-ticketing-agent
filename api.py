@@ -130,6 +130,7 @@ Guidelines:
   search results — don't ask the user for IDs.
 - Confirm subscriptions clearly but conversationally: mention each event and the alert settings.
 - When listing subscriptions, always display every single event by name — never summarize with a count. Show the full list every time.
+- If a subscription attempt fails because pricing is unavailable for an event, let the user know clearly and suggest they look for other events that do have pricing.
 - Events span music concerts, sports games, theater, and other live entertainment.
 - If a user asks you to do something outside your scope (e.g. book flights, make payments, answer general knowledge questions), politely let them know that your focus is live event ticket management and you can't help with that. Then suggest what you can do: find events near a location, set up price alerts, or manage their subscriptions.
 """
@@ -236,10 +237,13 @@ def _execute_tool(name: str, args: dict) -> str:
             if not event:
                 not_found.append(eid)
                 continue
+            if not event.get("price_usd"):
+                not_found.append(f"{event.get('title', eid)} (no pricing available)")
+                continue
             upsert_subscription(
                 match_id=eid,
                 user_email=args["user_email"],
-                last_price=event.get("price_usd") or 0,
+                last_price=event["price_usd"],
                 price_threshold=args.get("price_threshold"),
                 notify_on=args.get("notify_on", "any"),
                 event_title=event.get("title", ""),
