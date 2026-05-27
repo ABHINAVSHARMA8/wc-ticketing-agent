@@ -165,7 +165,7 @@ TOOLS = [
                 "properties": {
                     "event_ids":       {"type": "array", "items": {"type": "string"}, "description": "List of event IDs from search results"},
                     "user_email":      {"type": "string", "description": "Email address to send alerts to"},
-                    "price_threshold": {"type": ["number", "null"], "description": "Alert only when price drops below this value. Omit or pass null if no threshold."},
+                    "price_threshold": {"type": ["number", "null"], "description": "Alert only when price drops below this value. Pass JSON null (not the string 'null') if no threshold."},
                     "notify_on":       {"type": "string", "enum": ["any", "drop", "rise"], "description": "Defaults to 'any'"},
                 },
                 "required": ["event_ids", "user_email"],
@@ -226,6 +226,10 @@ def _execute_tool(name: str, args: dict) -> str:
         return json.dumps(results, indent=2)
 
     if name == "subscribe_to_events":
+        threshold = args.get("price_threshold")
+        if threshold == "null" or threshold == "":
+            threshold = None
+        args["price_threshold"] = threshold
         subscribed, not_found = [], []
         for eid in args["event_ids"]:
             try:
