@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: wc-ticketing-agent
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    # NOTE: SQLite is ephemeral on Render free tier (resets on redeploy).
+    # For persistence, add a Render Postgres database and migrate db.py.
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: TICKETMASTER_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+
+  # NOTE: The monitor requires access to the same database as the web service.
+  # On the free tier with SQLite this won't work (separate filesystems).
+  # Uncomment after migrating to Render Postgres.
+  #
+  # - type: worker
+  #   name: wc-ticketing-agent-monitor
+  #   runtime: python
+  #   buildCommand: pip install -r requirements.txt
+  #   startCommand: python monitor/monitor_prices.py --loop --interval 600
+  #   envVars:
+  #     - key: TICKETMASTER_API_KEY
+  #       sync: false
+  #     - key: RESEND_API_KEY
+  #       sync: false
