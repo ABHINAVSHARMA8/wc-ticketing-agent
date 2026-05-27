@@ -26,6 +26,21 @@ services:
       - key: CORS_ORIGINS
         sync: false
 
+  - type: web
+    name: wc-ticketing-agent-mcp
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m mcp_server.server
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: wc-ticketing-agent-db
+          property: connectionString
+      - key: TICKETMASTER_API_KEY
+        sync: false
+      - key: MCP_API_KEY
+        sync: false
+
   - type: worker
     name: wc-ticketing-agent-monitor
     runtime: python

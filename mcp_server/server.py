@@ -1,199 +1,229 @@
 """
-Live Events Ticket Agent — MCP Server
-Exposes four tools:
-  - search_events        : find live events near a location within a date range
-  - subscribe_to_events  : subscribe to price alerts for one or more events
-  - list_subscriptions   : list a user's active subscriptions
-  - unsubscribe          : cancel one or more subscriptions
+Live Events Ticket Agent — MCP Server (Streamable HTTP transport)
+
+Run locally (stdio):  python -m mcp_server.server --stdio
+Run as HTTP server:   python -m mcp_server.server
+                      → listens on $PORT (default 8080) at /mcp
+
+Remote clients must pass:  Authorization: Bearer $MCP_API_KEY
 """
 
 import asyncio
 import json
+import logging
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from mcp import types
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from mcp.server.fastmcp import FastMCP
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 from mcp_server.db import (
     delete_subscription,
     get_subscriptions_for_user,
+    init_db,
     upsert_subscription,
 )
 from mcp_server.geo import haversine, resolve_location
-from mcp_server.ticketmaster import fetch_event_details, search_events as tm_search
+from mcp_server.ticketmaster import (
+    TicketmasterError,
+    fetch_event_details,
+    search_events as tm_search,
+)
 
-server = Server("live-events-agent")
+log = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+)
 
-
-@server.list_tools()
-async def list_tools() -> list[types.Tool]:
-    return [
-        types.Tool(
-            name="search_events",
-            description=(
-                "Search for live events (concerts, sports, theater) near a given location "
-                "within a date range. Results are sorted by distance then price."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "location":     {"type": "string", "description": "City name or place (e.g. 'Raleigh, NC')"},
-                    "date_from":    {"type": "string", "description": "Start of date range YYYY-MM-DD"},
-                    "date_to":      {"type": "string", "description": "End of date range YYYY-MM-DD"},
-                    "radius_miles": {"type": "number", "description": "Search radius in miles (default 100)"},
-                },
-                "required": ["location", "date_from", "date_to"],
-            },
-        ),
-        types.Tool(
-            name="subscribe_to_events",
-            description=(
-                "Subscribe a user to price-change alerts for one or more events. "
-                "Call this after search_events so you have the event IDs."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "event_ids":       {"type": "array", "items": {"type": "string"}, "description": "List of event IDs"},
-                    "user_email":      {"type": "string", "description": "Email address for alerts"},
-                    "price_threshold": {"type": "number", "description": "Alert only when price drops below this USD value (optional)"},
-                    "notify_on":       {"type": "string", "enum": ["any", "drop", "rise"], "description": "Defaults to 'any'"},
-                },
-                "required": ["event_ids", "user_email"],
-            },
-        ),
-        types.Tool(
-            name="list_subscriptions",
-            description="List all active price-alert subscriptions for a user.",
-            inputSchema={
-                "type": "object",
-                "properties": {"user_email": {"type": "string"}},
-                "required": ["user_email"],
-            },
-        ),
-        types.Tool(
-            name="unsubscribe",
-            description="Cancel price-alert subscriptions for one or more events.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "event_ids":  {"type": "array", "items": {"type": "string"}},
-                    "user_email": {"type": "string"},
-                },
-                "required": ["event_ids", "user_email"],
-            },
-        ),
-    ]
+mcp = FastMCP("live-events-agent")
 
 
-@server.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+# ── Auth middleware ───────────────────────────────────────────────────────────
 
-    if name == "search_events":
-        location    = arguments["location"]
-        date_from   = arguments["date_from"]
-        date_to     = arguments["date_to"]
-        radius      = int(arguments.get("radius_miles", 100))
+class BearerAuthMiddleware(BaseHTTPMiddleware):
+    """Reject requests that don't carry the correct MCP_API_KEY."""
 
-        coords = resolve_location(location)
-        if not coords:
-            return [types.TextContent(type="text", text=f"Could not geocode location: '{location}'.")]
-        lat, lng = coords
+    async def dispatch(self, request, call_next):
+        api_key = os.getenv("MCP_API_KEY")
+        if not api_key:
+            # No key configured — allow all (useful for local dev)
+            return await call_next(request)
+        auth = request.headers.get("Authorization", "")
+        if auth != f"Bearer {api_key}":
+            return Response("Unauthorized", status_code=401)
+        return await call_next(request)
 
+
+# ── Tools ─────────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def search_events(
+    location: str,
+    date_from: str,
+    date_to: str,
+    radius_miles: int = 100,
+) -> str:
+    """
+    Search for live events (concerts, sports, theater) near a location.
+
+    Args:
+        location: City name or place, e.g. 'Raleigh, NC'
+        date_from: Start of date range, YYYY-MM-DD
+        date_to: End of date range, YYYY-MM-DD
+        radius_miles: Search radius in miles (default 100)
+    """
+    coords = resolve_location(location)
+    if not coords:
+        return f"Could not geocode location: '{location}'"
+    lat, lng = coords
+
+    try:
+        results = await asyncio.to_thread(
+            tm_search, lat, lng, date_from, date_to, radius_miles
+        )
+    except TicketmasterError as e:
+        return f"Ticketmaster search failed: {e}"
+
+    for r in results:
+        r["distance_miles"] = round(haversine(lat, lng, r["lat"], r["lng"]))
+    results.sort(key=lambda x: (x["distance_miles"], x.get("price_usd") or 9999))
+
+    if not results:
+        return (
+            f"No events found near '{location}' "
+            f"between {date_from} and {date_to}."
+        )
+    return json.dumps(results, indent=2)
+
+
+@mcp.tool()
+async def subscribe_to_events(
+    event_ids: list[str],
+    user_email: str,
+    price_threshold: float | None = None,
+    notify_on: str = "any",
+) -> str:
+    """
+    Subscribe a user to price-change alerts for one or more events.
+
+    Args:
+        event_ids: List of event IDs from search_events results
+        user_email: Email address to send alerts to
+        price_threshold: Alert only when price drops below this USD value
+        notify_on: 'any' | 'drop' | 'rise' (default 'any')
+    """
+    subscribed, not_found = [], []
+    for eid in event_ids:
         try:
-            results = tm_search(lat, lng, date_from, date_to, radius)
-        except RuntimeError as e:
-            return [types.TextContent(type="text", text=str(e))]
+            event = await asyncio.to_thread(fetch_event_details, eid)
+        except TicketmasterError as e:
+            log.error("subscribe fetch error %s: %s", eid, e)
+            not_found.append(eid)
+            continue
+        if not event:
+            not_found.append(eid)
+            continue
+        await asyncio.to_thread(
+            upsert_subscription,
+            eid, user_email,
+            event.get("price_usd") or 0,
+            price_threshold, notify_on,
+            event.get("title", ""), event.get("venue", ""),
+            event.get("city", ""),  event.get("date", ""),
+        )
+        subscribed.append(
+            f"{event['title']} ({event['city']}) on {event['date']}"
+        )
 
-        for r in results:
-            r["distance_miles"] = round(haversine(lat, lng, r["lat"], r["lng"]))
-        results.sort(key=lambda x: (x["distance_miles"], x.get("price_usd") or 9999))
+    lines = []
+    if subscribed:
+        lines.append(f"Subscribed ({notify_on} price changes):")
+        lines.extend(f"  • {s}" for s in subscribed)
+        if price_threshold:
+            lines.append(f"Alert threshold: below ${price_threshold}")
+    if not_found:
+        lines.append(f"Event IDs not found: {', '.join(not_found)}")
+    return "\n".join(lines)
 
-        if not results:
-            return [types.TextContent(type="text", text=f"No events found near '{location}' between {date_from} and {date_to}.")]
-        return [types.TextContent(type="text", text=json.dumps(results, indent=2))]
 
-    elif name == "subscribe_to_events":
-        event_ids       = arguments["event_ids"]
-        user_email      = arguments["user_email"]
-        price_threshold = arguments.get("price_threshold")
-        notify_on       = arguments.get("notify_on", "any")
+@mcp.tool()
+async def list_subscriptions(user_email: str) -> str:
+    """
+    List all active price-alert subscriptions for a user.
 
-        subscribed, not_found = [], []
-        for eid in event_ids:
-            event = fetch_event_details(eid)
-            if not event:
-                not_found.append(eid)
-                continue
-            upsert_subscription(
-                match_id=eid,
-                user_email=user_email,
-                last_price=event.get("price_usd") or 0,
-                price_threshold=price_threshold,
-                notify_on=notify_on,
-                event_title=event.get("title", ""),
-                event_venue=event.get("venue", ""),
-                event_city=event.get("city", ""),
-                event_date=event.get("date", ""),
-            )
-            subscribed.append(f"{event['title']} ({event['city']}) on {event['date']}")
+    Args:
+        user_email: The user's email address
+    """
+    subs = await asyncio.to_thread(get_subscriptions_for_user, user_email)
+    if not subs:
+        return f"No active subscriptions for {user_email}."
 
-        lines = []
-        if subscribed:
-            lines.append(f"Subscribed ({notify_on} price changes):")
-            for s in subscribed:
-                lines.append(f"  • {s}")
-            if price_threshold:
-                lines.append(f"You'll be alerted when the price drops below ${price_threshold}.")
-            else:
-                lines.append("You'll be alerted on any price change.")
-        if not_found:
-            lines.append(f"Event IDs not found: {', '.join(not_found)}")
-        return [types.TextContent(type="text", text="\n".join(lines))]
+    lines = [f"Active subscriptions for {user_email}:"]
+    for s in subs:
+        title     = s.get("event_title") or s["match_id"]
+        date      = s.get("event_date") or ""
+        threshold = (
+            f"below ${s['price_threshold']}"
+            if s["price_threshold"] else "any change"
+        )
+        lines.append(
+            f"  • {title} ({date}) — "
+            f"notify on: {s['notify_on']}, threshold: {threshold}, "
+            f"last price: ${s['last_price']}"
+        )
+    return "\n".join(lines)
 
-    elif name == "list_subscriptions":
-        user_email = arguments["user_email"]
-        subs = get_subscriptions_for_user(user_email)
-        if not subs:
-            return [types.TextContent(type="text", text=f"No active subscriptions for {user_email}.")]
 
-        lines = [f"Active subscriptions for {user_email}:"]
-        for s in subs:
-            title     = s.get("event_title") or s["match_id"]
-            date      = s.get("event_date") or ""
-            threshold = f"below ${s['price_threshold']}" if s["price_threshold"] else "any change"
-            lines.append(
-                f"  • {title} ({date}) — "
-                f"notify on: {s['notify_on']}, threshold: {threshold}, "
-                f"last known price: ${s['last_price']}"
-            )
-        return [types.TextContent(type="text", text="\n".join(lines))]
+@mcp.tool()
+async def unsubscribe(event_ids: list[str], user_email: str) -> str:
+    """
+    Cancel price-alert subscriptions for one or more events.
 
-    elif name == "unsubscribe":
-        event_ids  = arguments["event_ids"]
-        user_email = arguments["user_email"]
-        subs = {s["match_id"]: s for s in get_subscriptions_for_user(user_email)}
+    Args:
+        event_ids: List of event IDs to unsubscribe from
+        user_email: The user's email address
+    """
+    subs = {
+        s["match_id"]: s
+        for s in await asyncio.to_thread(get_subscriptions_for_user, user_email)
+    }
+    removed, not_found = [], []
+    for eid in event_ids:
+        ok = await asyncio.to_thread(delete_subscription, eid, user_email)
+        if ok:
+            removed.append(subs.get(eid, {}).get("event_title") or eid)
+        else:
+            not_found.append(eid)
 
-        removed, not_found = [], []
-        for eid in event_ids:
-            if delete_subscription(eid, user_email):
-                removed.append(subs.get(eid, {}).get("event_title") or eid)
-            else:
-                not_found.append(eid)
+    lines = []
+    if removed:
+        lines.append(f"Unsubscribed from: {', '.join(removed)}")
+    if not_found:
+        lines.append(f"No subscription found for: {', '.join(not_found)}")
+    return "\n".join(lines)
 
-        lines = []
-        if removed:
-            lines.append(f"Unsubscribed from: {', '.join(removed)}")
-        if not_found:
-            lines.append(f"No subscription found for: {', '.join(not_found)}")
-        return [types.TextContent(type="text", text="\n".join(lines))]
 
-    return [types.TextContent(type="text", text=f"Unknown tool: {name}")]
-
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    asyncio.run(stdio_server(server))
+    if "--stdio" in sys.argv:
+        # Local Claude Desktop mode
+        asyncio.run(mcp.run_stdio_async())
+    else:
+        # Remote HTTP mode — add auth middleware then serve
+        init_db()
+        app = mcp.streamable_http_app()
+        app.add_middleware(BearerAuthMiddleware)
+
+        import uvicorn
+        port = int(os.getenv("PORT", 8080))
+        log.info("MCP HTTP server starting on port %d at /mcp", port)
+        uvicorn.run(app, host="0.0.0.0", port=port)
